@@ -1,0 +1,228 @@
+#!/bin/sh
+
+# put in /usr/sbin/fan_monitor
+
+# Intended for Asus RT-AX89X modded using Noctua NF-A9 fan (12 V)
+# The fan will turn on if any of the threshold temperatures are exceeded
+# See below about fan rotation only at max setting
+
+# for diagnostic output
+debug=${debug:-false}
+
+interval=30 # check sensors every 30 seconds
+
+cpu_limit=70.0
+wifi_limit=80.0
+
+# Noctua NF-A9 12 V doesn't rotate at 1600 and 1850, so only 2100 will be used below
+max_rpm=2100
+mid_rpm=1850
+low_rpm=1600
+off_rpm=0
+
+hwmon_glob='/sys/class/hwmon/hwmon*'
+thermal_zone_mode_glob='/sys/class/thermal/thermal_zone*/mode'
+
+fan_hwmon_pattern='*/gpio-fan/*'
+cpu_hwmon_pattern='*/soc*/soc*'
+wifi1_hwmon_pattern='*wifi/ieee80211/phy0/*'
+wifi2_hwmon_pattern='*wifi/ieee80211/phy1/*'
+
+fan_hwmon_path=''
+cpu_hwmon_path=''
+wifi1_hwmon_path=''
+wifi2_hwmon_path=''
+
+# Kernel variables
+fan_target='fan1_target'
+temp_input="temp1_input" # for reading, this appears to be common among all above hwmons
+
+# color values
+CLR_FG_RED_BLD='\e[1;31m'
+CLR_FG_GREEN_BLD='\e[1;32m'
+CLR_RESET='\e[0m'
+
+echo_debug() {
+  if $debug; then
+    echo "$@"
+  fi
+}
+
+printf_debug() {
+  if $debug; then
+    printf "$@"
+  fi
+}
+
+configure_monitor() {
+  local hwmon=''
+  for hwmon in $hwmon_glob; do
+    # canonicalize symlink
+    hwmon_path=$(readlink -f $hwmon)
+
+    if [[ "$hwmon_path" == "$fan_hwmon_pattern" ]]; then
+      fan_hwmon_path="$hwmon_path"
+    elif [[ "$hwmon_path" == "$cpu_hwmon_pattern" ]]; then
+      cpu_hwmon_path="$hwmon_path"
+    elif [[ "$hwmon_path" == "$wifi1_hwmon_pattern" ]]; then
+      wifi1_hwmon_path="$hwmon_path"
+    elif [[ "$hwmon_path" == "$wifi2_hwmon_pattern" ]]; then
+      wifi2_hwmon_path="$hwmon_path"
+    fi
+  done
+
+  if [[ "$fan_hwmon_path" == "" ]]; then
+    echo "Can't find fan hwmon path!"
+    exit 1
+  fi
+
+  if [[ "$cpu_hwmon_path" == "" ]]; then
+    echo "Can't find cpu hwmon path!"
+    exit 1
+  fi
+
+  if [[ "$wifi1_hwmon_path" == "" ]]; then
+    echo "Can't find wifi 1 hwmon path!"
+    exit 1
+  fi
+
+  if [[ "$wifi2_hwmon_path" == "" ]]; then
+    echo "Can't find wifi 2 hwmon path!"
+    exit 1
+  fi
+}
+
+fan_set_auto() {
+  local mode=''
+  for mode in $thermal_zone_mode_glob; do
+    echo 'enabled' > "$mode";
+  done
+}
+
+fan_set_manual() {
+  local mode=''
+  for mode in $thermal_zone_mode_glob; do
+    echo 'disabled' > "$mode";
+  done
+}
+
+configure_fan_modes() {
+  # Switch fan to stock auto when exiting or aborting the script
+  trap "{ fan_set_auto; exit; }" EXIT SIGINT SIGTERM
+
+  fan_set_manual
+}
+
+fan_get_rpm() {
+  cat ${fan_hwmon_path}/${fan_target}
+}
+
+fan_set_rpm() {
+  echo "$1" > ${fan_hwmon_path}/${fan_target}
+}
+
+# For converting $(($a != $b)) type of numeric comparison (they return 1 or 0)
+# to check condition that can be handled by if checks
+bool() {
+  if [[ "$1" == "1" ]]; then
+    return 0 # success code, i.e. true
+  else
+    return 1 # failure code, i.e. false
+  fi
+}
+
+fan_set() {
+  local cur_rpm=$(fan_get_rpm)
+  local new_rpm=$off_rpm
+
+  if $1; then
+      new_rpm=$max_rpm
+  fi
+
+  if bool $(( $new_rpm != $cur_rpm )); then
+    fan_set_rpm $new_rpm
+  fi
+}
+
+# simple arithmetic calculator with precision 2
+calc() {
+  local expr="$1"
+  awk 'BEGIN { OFMT = "%.2f"; print '"$expr"' }'
+}
+
+# simple arithmetic comparator
+cmpr() {
+  local expr="$1"
+  awk 'BEGIN { if ('"$expr"') print "true"; else print "false" }'
+}
+
+# CPU temperature in °C
+cpu_temp() {
+  calc "$(cat ${cpu_hwmon_path}/${temp_input}) / 1000"
+}
+
+# WiFi 1 temperature in °C
+wifi1_temp() {
+  calc "$(cat ${wifi1_hwmon_path}/${temp_input}) / 1000"
+}
+
+# WiFi 2 temperature in °C
+wifi2_temp() {
+  calc "$(cat ${wifi2_hwmon_path}/${temp_input}) / 1000"
+}
+
+run_monitor() {
+  # to trigger fan for cooling
+  local hot=false
+
+  while true; do
+    local cpu_deg=$(cpu_temp)
+    local wifi1_deg=$(wifi1_temp)
+    local wifi2_deg=$(wifi2_temp)
+
+    if $(cmpr "${cpu_deg} > ${cpu_limit}"); then
+      hot=true
+      printf_debug "${CLR_FG_RED_BLD}hot :${CLR_RESET} cpu temperature ${cpu_deg} > ${cpu_limit}!\n"
+    else
+      printf_debug "${CLR_FG_GREEN_BLD}cool:${CLR_RESET} cpu temperature ${cpu_deg} <= ${cpu_limit}\n"
+    fi
+
+    if $(cmpr "${wifi1_deg} > ${wifi_limit}"); then
+      hot=true
+      printf_debug "${CLR_FG_RED_BLD}hot :${CLR_RESET} wifi1 temperature ${wifi1_deg} > ${wifi_limit}!\n"
+    else
+      printf_debug "${CLR_FG_GREEN_BLD}cool:${CLR_RESET} wifi1 temperature ${wifi1_deg} <= ${wifi_limit}\n"
+    fi
+
+    if $(cmpr "${wifi2_deg} > ${wifi_limit}"); then
+      hot=true
+      printf_debug "${CLR_FG_RED_BLD}hot :${CLR_RESET} wifi2 temperature ${wifi2_deg} > ${wifi_limit}!\n"
+    else
+      printf_debug "${CLR_FG_GREEN_BLD}cool:${CLR_RESET} wifi2 temperature ${wifi2_deg} <= ${wifi_limit}\n"
+    fi
+
+    if $hot; then
+      fan_set true
+    else
+      fan_set false
+    fi
+
+    echo_debug "fan rpm: $(fan_get_rpm)"
+
+    sleep $interval &
+    wait %1
+  done
+}
+
+################################################################################
+
+configure_monitor
+
+echo_debug "thermal_zone_mode_glob=${thermal_zone_mode_glob}"
+echo_debug "fan_hwmon_path=${fan_hwmon_path}"
+echo_debug "cpu_hwmon_path=${cpu_hwmon_path}"
+echo_debug "wifi1_hwmon_path=${wifi1_hwmon_path}"
+echo_debug "wifi2_hwmon_path=${wifi2_hwmon_path}"
+
+configure_fan_modes
+run_monitor

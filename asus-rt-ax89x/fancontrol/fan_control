@@ -1,0 +1,35 @@
+#!/bin/sh /etc/rc.common
+
+# put in /etc/init.d/fan_control
+#
+# To start:
+# service fan_control start
+#
+# To stop:
+# service fan_control stop
+#
+# To enable on boot:
+# service fan_control enable
+#
+# To disable on boot:
+# service fan_control disable
+#
+# See: https://openwrt.org/docs/techref/initscripts
+#
+
+START=99
+STOP=99
+
+pidfile='/var/run/fan_monitor.pid'
+
+start() {
+  # Using short options since long ones don't work in OpenWRT set up
+  # With long options it would look like this:
+  #   start-stop-daemon --background --start --exec /usr/sbin/fan_monitor --make-pidfile --pidfile $pidfile
+  start-stop-daemon -b -S -x /usr/sbin/fan_monitor -m -p $pidfile
+}
+
+stop() {
+  #   start-stop-daemon --stop --pidfile $pidfile
+  start-stop-daemon -K -p $pidfile
+}
