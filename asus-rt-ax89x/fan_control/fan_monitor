@@ -9,7 +9,11 @@
 # for diagnostic output
 debug=${debug:-false}
 
-interval=30 # check sensors every 30 seconds
+interval_sec=30 # check sensors every 30 seconds
+
+# for smoother temperature fluctuation, cooling can continue for some time even after threshold is reached
+# this configures the number of intervals for such continuation
+cooldown_intervals=20 # [10 min]
 
 cpu_limit=70.0
 wifi_limit=80.0
@@ -172,6 +176,8 @@ wifi2_temp() {
 }
 
 run_monitor() {
+  local cooldown_iteration=0
+
   while true; do
     # to trigger fan for cooling
     local hot=false
@@ -201,16 +207,23 @@ run_monitor() {
       printf_debug "${CLR_FG_GREEN_BLD}cool:${CLR_RESET} wifi2 temperature ${wifi2_deg} <= ${wifi_limit}\n"
     fi
 
+    echo_debug "cooldown iteration: ${cooldown_iteration}"
+
     if $hot; then
+      cooldown_iteration=0
+      echo_debug "turning fan on"
       fan_set true
-    else
+    elif bool $(( cooldown_iteration == 0 )); then
+      echo_debug "turning fan off"
       fan_set false
     fi
 
     echo_debug "fan rpm: $(fan_get_rpm)"
 
-    sleep $interval &
+    sleep $interval_sec &
     wait %1
+
+    cooldown_iteration=$(( (cooldown_iteration + 1) % cooldown_intervals ))
   done
 }
 
