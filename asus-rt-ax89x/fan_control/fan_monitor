@@ -172,10 +172,10 @@ wifi2_temp() {
 }
 
 run_monitor() {
-  # to trigger fan for cooling
-  local hot=false
-
   while true; do
+    # to trigger fan for cooling
+    local hot=false
+
     local cpu_deg=$(cpu_temp)
     local wifi1_deg=$(wifi1_temp)
     local wifi2_deg=$(wifi2_temp)
