@@ -15,7 +15,7 @@ interval_sec=30 # check sensors every 30 seconds
 # this configures the number of intervals for such continuation
 cooldown_intervals=20 # [10 min]
 
-cpu_limit=70.0
+cpu_limit=75.0
 wifi_limit=80.0
 
 # Noctua NF-A9 12 V doesn't rotate at 1600 and 1850, so only 2100 will be used below
