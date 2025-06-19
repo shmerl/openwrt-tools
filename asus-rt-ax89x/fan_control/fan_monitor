@@ -2,9 +2,12 @@
 
 # put in /usr/sbin/fan_monitor
 
-# Intended for Asus RT-AX89X modded using Noctua NF-A9 fan (12 V)
+# Primarily intended for Asus RT-AX89X modded using Noctua NF-A9 fan (12 V)
 # The fan will turn on if any of the threshold temperatures are exceeded
-# See below about fan rotation only at max setting
+# See below about this fan's rotation only at max setting
+#
+# Setting mod_fan to false here will use rotation levels for the stock fan
+mod_fan=${mod_fan:-true}
 
 # for diagnostic output
 debug=${debug:-false}
@@ -15,10 +18,18 @@ interval_sec=30 # check sensors every 30 seconds
 # this configures the number of intervals for such continuation
 cooldown_intervals=20 # [10 min]
 
-cpu_limit=75.0
-wifi_limit=80.0
+if $mod_fan; then
+  cpu_threshold_max_deg=75.0 # °C
+else
+  cpu_threshold_low_deg=70.0 # °C
+  cpu_threshold_mid_deg=75.0 # °C
+  cpu_threshold_max_deg=80.0 # °C
+fi
 
-# Noctua NF-A9 12 V doesn't rotate at 1600 and 1850, so only 2100 will be used below
+wifi_threshold_deg=80.0 # °C
+
+# Noctua NF-A9 12 V doesn't rotate at 1600 and 1850, so only 2100 will be used for it
+# Stock fan supports two lower modes
 max_rpm=2100
 mid_rpm=1850
 low_rpm=1600
@@ -48,13 +59,13 @@ CLR_RESET='\e[0m'
 
 echo_debug() {
   if $debug; then
-    echo "$@"
+    echo "$@" >&2
   fi
 }
 
 printf_debug() {
   if $debug; then
-    printf "$@"
+    printf "$@" >&2
   fi
 }
 
@@ -137,11 +148,7 @@ bool() {
 
 fan_set() {
   local cur_rpm=$(fan_get_rpm)
-  local new_rpm=$off_rpm
-
-  if $1; then
-      new_rpm=$max_rpm
-  fi
+  local new_rpm="$1"
 
   if bool $(( $new_rpm != $cur_rpm )); then
     fan_set_rpm $new_rpm
@@ -175,49 +182,80 @@ wifi2_temp() {
   calc "$(cat ${wifi2_hwmon_path}/${temp_input}) / 1000"
 }
 
+fan_compute_rpm_from_wifi() {
+  local wifi1_deg=$(wifi1_temp)
+  local wifi2_deg=$(wifi2_temp)
+  local fan_rpm=$off_rpm
+
+  if $(cmpr "${wifi1_deg} > ${wifi_threshold_deg}"); then
+    fan_rpm=$max_rpm
+    printf_debug "${CLR_FG_RED_BLD}hot :${CLR_RESET} wifi1 temperature ${wifi1_deg} > ${wifi_threshold_deg}!\n"
+  else
+    printf_debug "${CLR_FG_GREEN_BLD}cool:${CLR_RESET} wifi1 temperature ${wifi1_deg} <= ${wifi_threshold_deg}\n"
+  fi
+
+  if $(cmpr "${wifi2_deg} > ${wifi_threshold_deg}"); then
+    fan_rpm=$max_rpm
+    printf_debug "${CLR_FG_RED_BLD}hot :${CLR_RESET} wifi2 temperature ${wifi2_deg} > ${wifi_threshold_deg}!\n"
+  else
+    printf_debug "${CLR_FG_GREEN_BLD}cool:${CLR_RESET} wifi2 temperature ${wifi2_deg} <= ${wifi_threshold_deg}\n"
+  fi
+
+  printf "%u" $fan_rpm
+}
+
+fan_compute_rpm_from_cpu_mod() {
+  local cpu_deg=$(cpu_temp)
+  local fan_rpm=$off_rpm
+
+  if $(cmpr "${cpu_deg} > ${cpu_threshold_max_deg}"); then
+    fan_rpm=$max_rpm
+    printf_debug "${CLR_FG_RED_BLD}hot :${CLR_RESET} cpu temperature ${cpu_deg} > ${cpu_threshold_max_deg}!\n"
+  else
+    printf_debug "${CLR_FG_GREEN_BLD}cool:${CLR_RESET} cpu temperature ${cpu_deg} <= ${cpu_threshold_max_deg}\n"
+  fi
+
+  printf "%u" $fan_rpm
+}
+
+fan_compute_rpm_from_cpu_stock() {
+  # TODO: implement
+  printf "%u" $off_rpm
+}
+
+fan_compute_rpm() {
+  local fan_rpm=$off_rpm
+
+  if $mod_fan; then
+    fan_rpm=$(fan_compute_rpm_from_cpu_mod)
+  else
+    fan_rpm=$(fan_compute_rpm_from_cpu_stock)
+  fi
+
+  local fan_rpm_from_wifi=$(fan_compute_rpm_from_wifi)
+  if bool $(( fan_rpm_from_wifi > fan_rpm )); then
+    fan_rpm=$fan_rpm_from_wifi
+  fi
+
+  printf "%u" $fan_rpm
+}
+
 run_monitor() {
   local cooldown_iteration=0
 
   while true; do
-    # to trigger fan for cooling
-    local hot=false
+    local fan_rpm=$(fan_compute_rpm)
 
-    local cpu_deg=$(cpu_temp)
-    local wifi1_deg=$(wifi1_temp)
-    local wifi2_deg=$(wifi2_temp)
-
-    if $(cmpr "${cpu_deg} > ${cpu_limit}"); then
-      hot=true
-      printf_debug "${CLR_FG_RED_BLD}hot :${CLR_RESET} cpu temperature ${cpu_deg} > ${cpu_limit}!\n"
-    else
-      printf_debug "${CLR_FG_GREEN_BLD}cool:${CLR_RESET} cpu temperature ${cpu_deg} <= ${cpu_limit}\n"
-    fi
-
-    if $(cmpr "${wifi1_deg} > ${wifi_limit}"); then
-      hot=true
-      printf_debug "${CLR_FG_RED_BLD}hot :${CLR_RESET} wifi1 temperature ${wifi1_deg} > ${wifi_limit}!\n"
-    else
-      printf_debug "${CLR_FG_GREEN_BLD}cool:${CLR_RESET} wifi1 temperature ${wifi1_deg} <= ${wifi_limit}\n"
-    fi
-
-    if $(cmpr "${wifi2_deg} > ${wifi_limit}"); then
-      hot=true
-      printf_debug "${CLR_FG_RED_BLD}hot :${CLR_RESET} wifi2 temperature ${wifi2_deg} > ${wifi_limit}!\n"
-    else
-      printf_debug "${CLR_FG_GREEN_BLD}cool:${CLR_RESET} wifi2 temperature ${wifi2_deg} <= ${wifi_limit}\n"
+    if bool $(( fan_rpm != rpm_off )); then
+      cooldown_iteration=0
+      echo_debug "fan on"
+      fan_set $fan_rpm
+    elif bool $(( cooldown_iteration == 0 )); then
+      echo_debug "fan off"
+      fan_set $fan_rpm
     fi
 
     echo_debug "cooldown iteration: ${cooldown_iteration}"
-
-    if $hot; then
-      cooldown_iteration=0
-      echo_debug "turning fan on"
-      fan_set true
-    elif bool $(( cooldown_iteration == 0 )); then
-      echo_debug "turning fan off"
-      fan_set false
-    fi
-
     echo_debug "fan rpm: $(fan_get_rpm)"
 
     sleep $interval_sec &
