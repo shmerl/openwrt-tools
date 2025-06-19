@@ -55,6 +55,8 @@ temp_input="temp1_input" # for reading, this appears to be common among all abov
 # color values
 CLR_FG_RED_BLD='\e[1;31m'
 CLR_FG_GREEN_BLD='\e[1;32m'
+CLR_FG_YELLOW_BLD='\e[1;33m'
+CLR_FG_ORANGE_BLD='\e[1;38;2;255;108;0m'
 CLR_RESET='\e[0m'
 
 echo_debug() {
@@ -189,16 +191,16 @@ fan_compute_rpm_from_wifi() {
 
   if $(cmpr "${wifi1_deg} > ${wifi_threshold_deg}"); then
     fan_rpm=$max_rpm
-    printf_debug "${CLR_FG_RED_BLD}hot :${CLR_RESET} wifi1 temperature ${wifi1_deg} > ${wifi_threshold_deg}!\n"
+    printf_debug "${CLR_FG_RED_BLD}hot  :${CLR_RESET} wifi1 temperature ${wifi1_deg} > ${wifi_threshold_deg}!\n"
   else
-    printf_debug "${CLR_FG_GREEN_BLD}cool:${CLR_RESET} wifi1 temperature ${wifi1_deg} <= ${wifi_threshold_deg}\n"
+    printf_debug "${CLR_FG_GREEN_BLD}cool :${CLR_RESET} wifi1 temperature ${wifi1_deg} <= ${wifi_threshold_deg}\n"
   fi
 
   if $(cmpr "${wifi2_deg} > ${wifi_threshold_deg}"); then
     fan_rpm=$max_rpm
-    printf_debug "${CLR_FG_RED_BLD}hot :${CLR_RESET} wifi2 temperature ${wifi2_deg} > ${wifi_threshold_deg}!\n"
+    printf_debug "${CLR_FG_RED_BLD}hot  :${CLR_RESET} wifi2 temperature ${wifi2_deg} > ${wifi_threshold_deg}!\n"
   else
-    printf_debug "${CLR_FG_GREEN_BLD}cool:${CLR_RESET} wifi2 temperature ${wifi2_deg} <= ${wifi_threshold_deg}\n"
+    printf_debug "${CLR_FG_GREEN_BLD}cool :${CLR_RESET} wifi2 temperature ${wifi2_deg} <= ${wifi_threshold_deg}\n"
   fi
 
   printf "%u" $fan_rpm
@@ -210,17 +212,32 @@ fan_compute_rpm_from_cpu_mod() {
 
   if $(cmpr "${cpu_deg} > ${cpu_threshold_max_deg}"); then
     fan_rpm=$max_rpm
-    printf_debug "${CLR_FG_RED_BLD}hot :${CLR_RESET} cpu temperature ${cpu_deg} > ${cpu_threshold_max_deg}!\n"
+    printf_debug "${CLR_FG_RED_BLD}hot  :${CLR_RESET} cpu temperature ${cpu_deg} > ${cpu_threshold_max_deg}!\n"
   else
-    printf_debug "${CLR_FG_GREEN_BLD}cool:${CLR_RESET} cpu temperature ${cpu_deg} <= ${cpu_threshold_max_deg}\n"
+    printf_debug "${CLR_FG_GREEN_BLD}cool :${CLR_RESET} cpu temperature ${cpu_deg} <= ${cpu_threshold_max_deg}\n"
   fi
 
   printf "%u" $fan_rpm
 }
 
 fan_compute_rpm_from_cpu_stock() {
-  # TODO: implement
-  printf "%u" $off_rpm
+  local cpu_deg=$(cpu_temp)
+  local fan_rpm=$off_rpm
+
+  if $(cmpr "${cpu_deg} > ${cpu_threshold_low_deg}") && $(cmpr "${cpu_deg} <= ${cpu_threshold_mid_deg}"); then
+    fan_rpm=$low_rpm
+    printf_debug "${CLR_FG_YELLOW_BLD}warm :${CLR_RESET} cpu temperature ${cpu_deg} ∈ (${cpu_threshold_low_deg}, ${cpu_threshold_mid_deg}]!\n"
+  elif $(cmpr "${cpu_deg} > ${cpu_threshold_mid_deg}") && $(cmpr "${cpu_deg} <= ${cpu_threshold_max_deg}"); then
+    fan_rpm=$mid_rpm
+    printf_debug "${CLR_FG_ORANGE_BLD}warm+:${CLR_RESET} cpu temperature ${cpu_deg} ∈ (${cpu_threshold_mid_deg}, ${cpu_threshold_max_deg}]!\n"
+  elif $(cmpr "${cpu_deg} > ${cpu_threshold_max_deg}"); then
+    fan_rpm=$max_rpm
+    printf_debug "${CLR_FG_RED_BLD}hot  :${CLR_RESET} cpu temperature ${cpu_deg} > ${cpu_threshold_max_deg}!\n"
+  else
+    printf_debug "${CLR_FG_GREEN_BLD}cool :${CLR_RESET} cpu temperature ${cpu_deg} <= ${cpu_threshold_low_deg}\n"
+  fi
+
+  printf "%u" $fan_rpm
 }
 
 fan_compute_rpm() {
